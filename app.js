@@ -116,7 +116,7 @@ function openApp(id){
   $('#dialog-title').textContent=app.school;$('#detail-eyebrow').textContent='APPLICATION DETAILS';$('#delete-app').hidden=false;
   for(const field of ['school','program','status','deadline','fee','funding','letters','department','portal','notes']) form.elements[field].value=app[field]||((field==='status')?'Not specified':'');
   renderEditors(app);renderLinks(app);
-  $('#source-hint').textContent=app.sourceRow?`Imported from your spreadsheet, row ${app.sourceRow}. Statuses, fees, and older notes reflect what was recorded there. Deadline and unconfirmed requirements need checking.`:'Added to this tracker.';
+  $('#source-hint').textContent=app.sourceRow?`Imported from spreadsheet row ${app.sourceRow}. ${app.recommendationsReviewed?'Recommender information also reflects school emails reviewed on 10 November 2026. ':''}Check the portal for current requirements and progress.`:'Added to this tracker.';
   $('#detail-dialog').showModal();
 }
 function addNewApp(){
