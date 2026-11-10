@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#203d37">
+  <meta name="description" content="A private space to keep track of graduate applications, documents and next steps.">
+  <title>GradPath | Application tracker</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div id="login" class="login-view">
+    <div class="login-orb orb-one"></div><div class="login-orb orb-two"></div>
+    <main class="login-card">
+      <div class="brand"><span class="brand-mark">g<span>.</span></span><span>gradpath<span class="brand-period">.</span></span></div>
+      <div class="login-illustration" aria-hidden="true"><div class="mini-card mini-one"><span></span><i></i><i></i></div><div class="mini-card mini-two"><b>✓</b></div><div class="mini-star">✳</div></div>
+      <p class="eyebrow">YOUR APPLICATION COMPANION</p>
+      <h1>A little clarity for the road ahead.</h1>
+      <p class="login-copy">Keep every school, document, and next step together in one calm space.</p>
+      <form id="unlock-form">
+        <div id="starter-box" class="starter-box"><label for="starter-file">First time on this device?</label><p>Choose your private starter file or an encrypted backup. It stays in your browser.</p><input id="starter-file" type="file" accept="application/json,.json"></div>
+        <label for="password">Your access phrase</label>
+        <div class="input-with-button"><input id="password" type="password" placeholder="Enter your access phrase" autocomplete="current-password" required><button type="button" class="show-password" id="show-password" aria-label="Show access phrase">Show</button></div>
+        <button class="button primary full" id="unlock-button" type="submit">Open my tracker <span aria-hidden="true">→</span></button>
+        <p id="login-error" class="form-error" role="alert"></p>
+      </form>
+      <p class="privacy-note"><span aria-hidden="true">♧</span> Your application data is encrypted. Changes stay in this browser.</p>
+    </main>
+    <p class="login-footer">Made for the journey ahead <span>✳</span></p>
+  </div>
+
+  <div id="app" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">g<span>.</span></span><span>gradpath<span class="brand-period">.</span></span></div>
+      <p class="sidebar-label">WORKSPACE</p>
+      <nav class="nav" aria-label="Main navigation">
+        <button class="nav-item active" data-view="overview"><span class="nav-icon">◫</span> Overview</button>
+        <button class="nav-item" data-view="applications"><span class="nav-icon">▤</span> Applications <span class="nav-count" id="nav-count">0</span></button>
+        <button class="nav-item" data-view="todo"><span class="nav-icon">☑</span> To-do list</button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="sidebar-tip"><span class="tip-star">✳</span><strong>One step at a time.</strong><p>Every small task brings you closer to your next chapter.</p></div>
+        <button class="sidebar-link" id="export-button">↓ &nbsp; Export backup</button>
+        <button class="sidebar-link" id="import-button">↑ &nbsp; Import backup</button>
+        <button class="sidebar-link" id="lock-button">◇ &nbsp; Lock tracker</button>
+      </div>
+    </aside>
+    <main class="main-content">
+      <header class="topbar"><div><span class="topbar-kicker">YOUR WORKSPACE</span><p id="today-label"></p></div><div class="topbar-actions"><a id="source-link" class="source-link" target="_blank" rel="noopener noreferrer">↗ &nbsp; Source sheet</a><div class="avatar" aria-label="Your workspace">EF</div></div></header>
+      <section id="overview-view" class="view">
+        <div class="welcome-row"><div><p class="eyebrow">A CLEARER VIEW OF WHAT'S NEXT <span class="small-sparkle">✳</span></p><h1>Welcome back, Elvis<span class="heading-dot">.</span></h1><p class="subtitle">Your applications, all in one place.</p></div><button class="button primary add-app">+ &nbsp; Add application</button></div>
+        <div class="stats" id="stats"></div>
+        <div class="section-header"><div><p class="eyebrow">KEEP THE MOMENTUM</p><h2>What's on your list</h2><p class="section-subtitle">Tasks recorded as outstanding in your tracker.</p></div><button class="text-button" data-switch-view="todo">View all tasks <span>→</span></button></div>
+        <div class="focus-grid" id="focus-grid"></div>
+        <div class="section-header applications-header"><div><p class="eyebrow">YOUR SCHOOLS</p><h2>Application overview</h2><p class="section-subtitle">Select a school to see its details and edit your progress.</p></div><button class="text-button" data-switch-view="applications">See all schools <span>→</span></button></div>
+        <div id="overview-list" class="application-list"></div>
+      </section>
+      <section id="applications-view" class="view" hidden>
+        <div class="welcome-row"><div><p class="eyebrow">YOUR SCHOOLS</p><h1>Applications<span class="heading-dot">.</span></h1><p class="subtitle">A home for every application in your plan.</p></div><button class="button primary add-app">+ &nbsp; Add application</button></div>
+        <div class="toolbar"><label class="search-wrap"><span aria-hidden="true">⌕</span><span class="sr-only">Search applications</span><input id="search" type="search" placeholder="Search school or program..."></label><label class="filter-wrap"><span class="sr-only">Filter by status</span><select id="status-filter"><option value="">All statuses</option><option>In Progress</option><option>Not Started</option><option>Submitted</option><option>Completed</option><option>Accepted</option><option>Rejected</option><option>Not specified</option></select></label></div>
+        <p class="results-label" id="results-label"></p><div id="all-list" class="application-list"></div>
+      </section>
+      <section id="todo-view" class="view" hidden>
+        <div class="welcome-row"><div><p class="eyebrow">ONE THING AT A TIME</p><h1>Your to-do list<span class="heading-dot">.</span></h1><p class="subtitle">Your next steps, gathered in one place.</p></div></div>
+        <div class="todo-intro"><span>✳</span><p>Only items marked <strong>To do</strong> appear here. Open an application to confirm unknown requirements, add tasks, or update recommendation letters.</p></div>
+        <div id="todo-list" class="todo-list"></div>
+      </section>
+      <footer class="page-footer"><span>GradPath · Your next chapter starts here.</span><span>Changes are saved only in this browser. Export a backup to move them.</span></footer>
+    </main>
+  </div>
+
+  <dialog id="detail-dialog" class="detail-dialog" aria-labelledby="dialog-title">
+    <form id="detail-form" method="dialog">
+      <div class="dialog-head"><div><p class="eyebrow" id="detail-eyebrow">APPLICATION DETAILS</p><h2 id="dialog-title">Your application</h2><p>Update the details and checklist as you make progress.</p></div><button type="button" id="close-dialog" class="icon-button" aria-label="Close">×</button></div>
+      <div class="dialog-body">
+        <div class="form-grid"><label>University or school <span>*</span><input name="school" required></label><label>Program<input name="program"></label><label>Application status<select name="status"><option>Not specified</option><option>Not Started</option><option>In Progress</option><option>Submitted</option><option>Completed</option><option>Accepted</option><option>Rejected</option></select></label><label>Deadline<input name="deadline" type="date"></label><label>Application fee or waiver<input name="fee" placeholder="e.g. $75 or waived"></label><label>Funding or assistantship<input name="funding" placeholder="Add a note"></label><label>Letters received / required<input name="letters" placeholder="e.g. 2/3" pattern="\\s*[0-9]+\\s*/\\s*[0-9]+\\s*" title="Enter a count like 2/3"></label></div>
+        <div class="detail-section"><div class="detail-section-head"><div><h3>Useful links</h3><p>Open these pages or replace them with the correct URLs.</p></div></div><div class="form-grid"><label>Department or program URL<input name="department" type="url" placeholder="https://..."></label><label>Graduate application URL<input name="portal" type="url" placeholder="https://..."></label></div><div id="detail-links" class="detail-links"></div></div>
+        <div class="detail-section"><div class="detail-section-head"><div><h3>Documents &amp; tasks</h3><p>“Confirm” means the source did not establish the requirement or completion.</p></div><button class="text-button" id="add-task" type="button">+ Add task</button></div><div id="task-editor" class="editor-list"></div></div>
+        <div class="detail-section"><div class="detail-section-head"><div><h3>Recommenders</h3><p>Names were not included in the spreadsheet. Add them here and update the letter count above as letters arrive.</p></div><button class="text-button" id="add-recommender" type="button">+ Add person</button></div><div id="recommender-editor" class="editor-list"></div></div>
+        <div class="detail-section"><label>Notes from your application<textarea name="notes" rows="4" placeholder="Add anything you want to remember"></textarea></label></div>
+        <p class="source-hint" id="source-hint"></p>
+      </div>
+      <div class="dialog-footer"><button id="delete-app" type="button" class="delete-button">Delete application</button><div><button type="button" id="cancel-dialog" class="button secondary">Cancel</button><button type="submit" class="button primary">Save changes</button></div></div>
+    </form>
+  </dialog>
+  <input id="import-file" type="file" accept="application/json,.json" hidden>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
