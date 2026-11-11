@@ -1,11 +1,12 @@
 'use strict';
 
 const STORAGE_KEY = 'gradpath-encrypted-v1';
+const PREVIOUS_KEY = 'gradpath-encrypted-before-password-change-v1';
 const $ = (selector, parent = document) => parent.querySelector(selector);
 const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
-const bytesFrom64 = value => Uint8Array.from(atob(value), c => c.charCodeAt(0));
-const bytesTo64 = value => btoa(Array.from(new Uint8Array(value), c => String.fromCharCode(c)).join(''));
-let data = null, sessionKey = null, envelope = null, starterEnvelope = null, currentId = null, activeView = 'overview', toastTimer;
+const {bytesTo64, deriveKey, decrypt, accessPhraseFromFile, encryptWithPassword} = globalThis.GradCrypto;
+let data = null, sessionKey = null, envelope = null, starterEnvelope = null, currentId = null, activeView = 'overview', toastTimer, passwordSetupMode = 'recovery';
+let writeQueue = Promise.resolve();
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -17,22 +18,18 @@ const taskTodo = task => task.status === 'todo';
 const short = (s, max = 115) => String(s || '').length > max ? `${String(s).slice(0,max-1)}…` : String(s || '');
 
 function toast(message){ const node=$('#toast'); node.textContent=message; node.classList.add('visible'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>node.classList.remove('visible'),3500); }
-async function deriveKey(password, params){
-  const base = await crypto.subtle.importKey('raw',new TextEncoder().encode(password),'PBKDF2',false,['deriveKey']);
-  return crypto.subtle.deriveKey({name:'PBKDF2',salt:bytesFrom64(params.salt),iterations:params.iterations,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+function serializeWrite(action){
+  const pending=writeQueue.then(action);writeQueue=pending.catch(()=>{});return pending;
 }
-async function decrypt(blob,key){
-  const plain=await crypto.subtle.decrypt({name:'AES-GCM',iv:bytesFrom64(blob.iv)},key,bytesFrom64(blob.ciphertext));
-  const value=JSON.parse(new TextDecoder().decode(plain));
-  if (!value || !Array.isArray(value.applications)) throw new Error('Invalid tracker');
-  return value;
-}
-async function persist(){
-  const iv=crypto.getRandomValues(new Uint8Array(12));
-  const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv},sessionKey,new TextEncoder().encode(JSON.stringify(data)));
-  const updated={...envelope,iv:bytesTo64(iv),ciphertext:bytesTo64(encrypted)};
-  localStorage.setItem(STORAGE_KEY,JSON.stringify(updated));
-  envelope=updated;
+function persist(){
+  return serializeWrite(async()=>{
+    if(!data||!sessionKey||!envelope)throw new Error('The tracker is locked.');
+    const observed=localStorage.getItem(STORAGE_KEY), iv=crypto.getRandomValues(new Uint8Array(12));
+    const encrypted=await crypto.subtle.encrypt({name:'AES-GCM',iv},sessionKey,new TextEncoder().encode(JSON.stringify(data)));
+    if(localStorage.getItem(STORAGE_KEY)!==observed)throw new Error('This tracker changed in another tab.');
+    const updated={...envelope,iv:bytesTo64(iv),ciphertext:bytesTo64(encrypted)};
+    localStorage.setItem(STORAGE_KEY,JSON.stringify(updated));envelope=updated;
+  });
 }
 async function loadSeed(){
   const cached=localStorage.getItem(STORAGE_KEY);
@@ -48,15 +45,97 @@ $('#starter-file').addEventListener('change',async event=>{
   try{const value=JSON.parse(await file.text());if(!value.kdf?.salt||!value.iv||!value.ciphertext)throw new Error();starterEnvelope=value;$('#login-error').textContent='';}
   catch{$('#login-error').textContent='Please choose a valid GradPath starter file or backup.';}
 });
-$('#show-password').addEventListener('click',()=>{const field=$('#password'); const visible=field.type==='text';field.type=visible?'password':'text';$('#show-password').textContent=visible?'Show':'Hide';$('#show-password').setAttribute('aria-label',visible?'Show access phrase':'Hide access phrase');});
+$('#show-password').addEventListener('click',()=>{const field=$('#password'); const visible=field.type==='text';field.type=visible?'password':'text';$('#show-password').textContent=visible?'Show':'Hide';$('#show-password').setAttribute('aria-label',visible?'Show password':'Hide password');});
 $('#unlock-form').addEventListener('submit',async event=>{
   event.preventDefault(); const button=$('#unlock-button'); const error=$('#login-error'); error.textContent=''; button.disabled=true;button.textContent='Opening...';
   try{
     if(!crypto.subtle) throw new Error('Open this site over HTTPS in a modern browser.');
     const candidate=await loadSeed(); const key=await deriveKey($('#password').value,candidate.kdf); const decoded=await decrypt(candidate,key);
     localStorage.setItem(STORAGE_KEY,JSON.stringify(candidate));envelope=candidate;sessionKey=key;data=decoded;starterEnvelope=null;$('#starter-box').hidden=true;$('#password').value='';$('#login').hidden=true;$('#app').hidden=false;render();
-  }catch(e){error.textContent=e.message==='Choose your private starter file or backup first.'?e.message:'Could not open the tracker. Check your access phrase or backup.';}
+  }catch(e){error.textContent=e.message==='Choose your private starter file or backup first.'?e.message:'That password did not open this tracker. Use “Set a password I can remember” with your original access phrase file.';}
   finally{button.disabled=false;button.innerHTML='Open my tracker <span aria-hidden="true">→</span>';}
+});
+
+function updateRecoveryFields(){
+  const source=$('#reset-source').value, method=$('#reset-unlock-method').value;
+  $('#reset-backup-box').hidden=source!=='backup';
+  $('#phrase-file-box').hidden=method!=='phrase-file';
+  $('#old-password-box').hidden=method!=='password';
+}
+function openPasswordSetup(mode){
+  passwordSetupMode=mode;
+  const form=$('#password-setup-form');form.reset();$('#password-setup-error').textContent='';
+  $('#recovery-controls').hidden=mode==='unlocked';
+  $('#password-intro').textContent=mode==='unlocked'?'Choose a new password for the tracker currently open in this browser.':'Use your original access phrase file to unlock your tracker, then choose a password you can remember.';
+  $('#password-submit').textContent=mode==='unlocked'?'Change password':'Set password and open';
+  const current=localStorage.getItem(STORAGE_KEY), previous=localStorage.getItem(PREVIOUS_KEY);
+  $('#reset-source').querySelector('option[value="current"]').hidden=!current;
+  $('#reset-source').querySelector('option[value="previous"]').hidden=!previous;
+  $('#reset-source').value=current?'current':'backup';
+  $('#reset-unlock-method').value='phrase-file';updateRecoveryFields();
+  $('#password-dialog').showModal();
+}
+$('#setup-password').addEventListener('click',()=>openPasswordSetup('recovery'));
+$('#change-password').addEventListener('click',()=>openPasswordSetup('unlocked'));
+$('#reset-source').addEventListener('change',updateRecoveryFields);
+$('#reset-unlock-method').addEventListener('change',updateRecoveryFields);
+$('#password-close').addEventListener('click',()=>$('#password-dialog').close());
+$('#password-cancel').addEventListener('click',()=>$('#password-dialog').close());
+$('#password-setup-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const error=$('#password-setup-error'),button=$('#password-submit'),newPassword=$('#new-password').value;
+  error.textContent='';
+  if(newPassword!==$('#confirm-password').value){error.textContent='The two new passwords do not match. Please try again.';return;}
+  if(newPassword.length<12){error.textContent='Choose a password with at least 12 characters.';return;}
+  button.disabled=true;button.textContent='Setting password...';
+  const previousButtonText=passwordSetupMode==='unlocked'?'Change password':'Set password and open';
+  try{
+    if(!crypto.subtle) throw new Error('Open this website over HTTPS in a modern browser.');
+    const changed=await serializeWrite(async()=>{
+      const observedCurrent=localStorage.getItem(STORAGE_KEY);
+      let workingData=data, selectedSource='current';
+      if(passwordSetupMode==='recovery'){
+        selectedSource=$('#reset-source').value;
+        let raw=selectedSource==='current'?observedCurrent:selectedSource==='previous'?localStorage.getItem(PREVIOUS_KEY):null;
+        if(selectedSource==='backup'){
+          const file=$('#reset-backup-file').files[0];
+          if(!file)throw new Error('Choose your GradPath starter or backup file.');
+          raw=await file.text();
+        }
+        if(!raw)throw new Error('There is no saved tracker in this browser. Choose a backup file.');
+        let candidate;try{candidate=JSON.parse(raw);}catch{throw new Error('Choose a valid GradPath starter or backup file.');}
+        let oldPassword;
+        if($('#reset-unlock-method').value==='phrase-file'){
+          const file=$('#phrase-file').files[0];if(!file)throw new Error('Choose your GradPath access phrase .txt file.');
+          oldPassword=accessPhraseFromFile(await file.text());
+        }else{
+          oldPassword=$('#old-password').value;if(!oldPassword)throw new Error('Enter the password used for this tracker or backup.');
+        }
+        try{const oldKey=await deriveKey(oldPassword,candidate.kdf);workingData=await decrypt(candidate,oldKey);}
+        catch{throw new Error('That access phrase or password does not open the selected tracker. Try another backup or password.');}
+      }
+      if(!workingData)throw new Error('Open your tracker before changing its password.');
+      const next=await encryptWithPassword(workingData,newPassword);
+      if(localStorage.getItem(STORAGE_KEY)!==observedCurrent)throw new Error('This tracker changed in another tab. Refresh the page and try again.');
+      if(passwordSetupMode==='recovery'&&selectedSource!=='current'&&observedCurrent&&!confirm('The selected backup may be older. Replacing the current tracker in this browser could remove recent changes. Continue?'))return false;
+      if(observedCurrent)localStorage.setItem(PREVIOUS_KEY,observedCurrent);
+      localStorage.setItem(STORAGE_KEY,JSON.stringify(next.blob));
+      data=workingData;sessionKey=next.key;envelope=next.blob;starterEnvelope=null;return true;
+    });
+    if(!changed)return;
+    $('#starter-box').hidden=true;$('#password').value='';$('#login-error').textContent='';
+    $('#login').hidden=true;$('#app').hidden=false;render();
+    let saveMessage='You can save your password in your browser’s password manager.';
+    if($('#remember-password').checked){
+      if(typeof window.PasswordCredential==='function'&&navigator.credentials?.store){
+        try{const credential=new PasswordCredential({id:'gradpath-elvis',name:'GradPath',password:newPassword});navigator.credentials.store(credential).catch(()=>{});saveMessage='If your browser asks to save your password, choose Save.';}
+        catch{saveMessage='Your browser could not offer to save the password. Add it to your password manager manually.';}
+      }else saveMessage='Your browser may not support automatic saving. Add this password to your password manager manually.';
+    }
+    $('#save-password-message').textContent=saveMessage;
+    $('#password-setup-form').reset();$('#password-dialog').close();$('#password-success').showModal();
+  }catch(e){error.textContent=e.message||'Could not change the password. Your saved tracker was not changed.';}
+  finally{button.disabled=false;button.textContent=previousButtonText;}
 });
 
 function switchView(view){
@@ -166,12 +245,25 @@ document.addEventListener('click',async event=>{
   const app=data.applications.find(a=>a.id===done.dataset.app),task=app?.tasks?.find(t=>t.id===done.dataset.finish);if(!task)return;
   task.status='done';try{await persist();render();toast('Task marked complete.');}catch{toast('Could not save. Check your browser storage settings.');}
 });
-$('#export-button').addEventListener('click',async()=>{
-  try{await persist();const blob=new Blob([JSON.stringify(envelope,null,2)],{type:'application/json'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`gradpath-backup-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);toast('Encrypted backup downloaded.');}catch{toast('Could not create a backup.');}
-});
+async function downloadBackup(){
+  try{await persist();const blob=new Blob([JSON.stringify(envelope,null,2)],{type:'application/json'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`gradpath-backup-${new Date().toISOString().slice(0,10)}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);toast('Encrypted backup downloaded.');return true;}catch{toast('Could not create a backup.');return false;}
+}
+$('#export-button').addEventListener('click',downloadBackup);
+$('#backup-now').addEventListener('click',async()=>{if(await downloadBackup())$('#password-success').close();});
+$('#backup-later').addEventListener('click',()=>$('#password-success').close());
 $('#import-button').addEventListener('click',()=>$('#import-file').click());
 $('#import-file').addEventListener('change',async event=>{
   const file=event.target.files[0];if(!file)return;
-  try{const imported=JSON.parse(await file.text());if(imported.kdf.salt!==envelope.kdf.salt||imported.kdf.iterations!==envelope.kdf.iterations)throw new Error('different key');const decoded=await decrypt(imported,sessionKey);if(!confirm('Replace the tracker in this browser with this backup?'))return;localStorage.setItem(STORAGE_KEY,JSON.stringify(imported));envelope=imported;data=decoded;render();toast('Backup restored in this browser.');}catch{toast('Could not open this backup with the current access phrase.');}finally{event.target.value='';}
+  try{
+    const imported=JSON.parse(await file.text());
+    const restored=await serializeWrite(async()=>{
+      if(imported.kdf.salt!==envelope.kdf.salt||imported.kdf.iterations!==envelope.kdf.iterations)throw new Error('different key');
+      const observed=localStorage.getItem(STORAGE_KEY), decoded=await decrypt(imported,sessionKey);
+      if(localStorage.getItem(STORAGE_KEY)!==observed)throw new Error('changed');
+      if(!confirm('Replace the tracker in this browser with this backup?'))return false;
+      localStorage.setItem(STORAGE_KEY,JSON.stringify(imported));envelope=imported;data=decoded;return true;
+    });
+    if(restored){render();toast('Backup restored in this browser.');}
+  }catch{toast('Could not open this backup with the current password. Older backups may use an earlier password.');}finally{event.target.value='';}
 });
 $('#lock-button').addEventListener('click',()=>{data=null;sessionKey=null;envelope=null;$('#app').hidden=true;$('#login').hidden=false;$('#login-error').textContent='';$('#password').focus();});

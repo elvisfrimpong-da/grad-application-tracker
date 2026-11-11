@@ -7,6 +7,7 @@
   <meta name="description" content="A private space to keep track of graduate applications, documents and next steps.">
   <title>GradPath | Application tracker</title>
   <link rel="stylesheet" href="styles.css">
+  <script src="crypto.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -20,10 +21,12 @@
       <p class="login-copy">Keep every school, document, and next step together in one calm space.</p>
       <form id="unlock-form">
         <div id="starter-box" class="starter-box"><label for="starter-file">First time on this device?</label><p>Choose your private starter file or an encrypted backup. It stays in your browser.</p><input id="starter-file" type="file" accept="application/json,.json"></div>
-        <label for="password">Your access phrase</label>
-        <div class="input-with-button"><input id="password" type="password" placeholder="Enter your access phrase" autocomplete="current-password" required><button type="button" class="show-password" id="show-password" aria-label="Show access phrase">Show</button></div>
+        <input class="sr-only" type="text" name="username" value="gradpath-elvis" autocomplete="username" tabindex="-1" aria-hidden="true">
+        <label for="password">Password or original access phrase</label>
+        <div class="input-with-button"><input id="password" name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required><button type="button" class="show-password" id="show-password" aria-label="Show password">Show</button></div>
         <button class="button primary full" id="unlock-button" type="submit">Open my tracker <span aria-hidden="true">→</span></button>
         <p id="login-error" class="form-error" role="alert"></p>
+        <button class="setup-link" id="setup-password" type="button">Set a password I can remember</button>
       </form>
       <p class="privacy-note"><span aria-hidden="true">♧</span> Your application data is encrypted. Changes stay in this browser.</p>
     </main>
@@ -47,7 +50,7 @@
       </div>
     </aside>
     <main class="main-content">
-      <header class="topbar"><div><span class="topbar-kicker">YOUR WORKSPACE</span><p id="today-label"></p></div><div class="topbar-actions"><a id="source-link" class="source-link" target="_blank" rel="noopener noreferrer">↗ &nbsp; Source sheet</a><div class="avatar" aria-label="Your workspace">EF</div></div></header>
+      <header class="topbar"><div><span class="topbar-kicker">YOUR WORKSPACE</span><p id="today-label"></p></div><div class="topbar-actions"><button id="change-password" class="topbar-link" type="button">Change password</button><a id="source-link" class="source-link" target="_blank" rel="noopener noreferrer">↗ &nbsp; Source sheet</a><div class="avatar" aria-label="Your workspace">EF</div></div></header>
       <section id="overview-view" class="view">
         <div class="welcome-row"><div><p class="eyebrow">A CLEARER VIEW OF WHAT'S NEXT <span class="small-sparkle">✳</span></p><h1>Welcome back, Elvis<span class="heading-dot">.</span></h1><p class="subtitle">Your applications, all in one place.</p></div><button class="button primary add-app">+ &nbsp; Add application</button></div>
         <div class="stats" id="stats"></div>
@@ -70,6 +73,33 @@
     </main>
   </div>
 
+  <dialog id="password-dialog" class="password-dialog" aria-labelledby="password-dialog-title">
+    <form id="password-setup-form">
+      <div class="password-dialog-head"><div><p class="eyebrow">A PASSWORD YOU CHOOSE</p><h2 id="password-dialog-title">Set your password</h2></div><button type="button" id="password-close" class="icon-button" aria-label="Close">×</button></div>
+      <div class="password-dialog-body">
+        <p id="password-intro" class="password-explanation">Use your original access phrase file to unlock your tracker, then choose a password you can remember.</p>
+        <div id="recovery-controls">
+          <label for="reset-source">Which tracker would you like to open?</label>
+          <select id="reset-source"><option value="current">This browser's saved tracker</option><option value="previous">Before the last password change</option><option value="backup">A backup file</option></select>
+          <div id="reset-backup-box" class="password-field" hidden><label for="reset-backup-file">Choose your starter or backup file</label><input id="reset-backup-file" type="file" accept="application/json,.json"><p class="field-help">Choose the GradPath starter file or a backup you saved earlier.</p></div>
+          <div class="password-field"><label for="reset-unlock-method">How would you like to unlock it?</label><select id="reset-unlock-method"><option value="phrase-file">Use my original access phrase file</option><option value="password">Enter its current password</option></select></div>
+          <div id="phrase-file-box" class="password-field"><label for="phrase-file">Choose your original access phrase file</label><input id="phrase-file" type="file" accept="text/plain,.txt"><p class="field-help">Select GradPath_Access_Phrase.txt. The file stays on your device.</p></div>
+          <div id="old-password-box" class="password-field" hidden><label for="old-password">Current password or access phrase</label><input id="old-password" type="password" autocomplete="current-password"></div>
+        </div>
+        <input class="sr-only" type="text" name="username" value="gradpath-elvis" autocomplete="username" tabindex="-1" aria-hidden="true">
+        <div class="password-field"><label for="new-password">New password</label><input id="new-password" name="new-password" type="password" autocomplete="new-password" minlength="12" maxlength="256" placeholder="At least 12 characters" required><p class="field-help">A few memorable words work well. Keep it private.</p></div>
+        <div class="password-field"><label for="confirm-password">Confirm new password</label><input id="confirm-password" name="confirm-password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></div>
+        <label class="save-choice"><input id="remember-password" type="checkbox"> Ask my browser to save this password</label>
+        <p id="password-setup-error" class="form-error" role="alert"></p>
+      </div>
+      <div class="password-dialog-footer"><button type="button" class="button secondary" id="password-cancel">Cancel</button><button type="submit" class="button primary" id="password-submit">Set password and open</button></div>
+    </form>
+  </dialog>
+  <dialog id="password-success" class="password-dialog" aria-labelledby="success-title">
+    <div class="password-dialog-head"><div><p class="eyebrow">PASSWORD UPDATED</p><h2 id="success-title">Your password is ready</h2></div></div>
+    <div class="password-dialog-body"><p class="password-explanation">Your tracker is encrypted with your new password in this browser. Download a fresh backup for another device or in case you clear your browser data.</p><p class="field-help">Older backups still need the password or access phrase used when they were created.</p><p id="save-password-message" class="field-help"></p></div>
+    <div class="password-dialog-footer"><button type="button" class="button secondary" id="backup-later">Later</button><button type="button" class="button primary" id="backup-now">Download backup</button></div>
+  </dialog>
   <dialog id="detail-dialog" class="detail-dialog" aria-labelledby="dialog-title">
     <form id="detail-form" method="dialog">
       <div class="dialog-head"><div><p class="eyebrow" id="detail-eyebrow">APPLICATION DETAILS</p><h2 id="dialog-title">Your application</h2><p>Update the details and checklist as you make progress.</p></div><button type="button" id="close-dialog" class="icon-button" aria-label="Close">×</button></div>
