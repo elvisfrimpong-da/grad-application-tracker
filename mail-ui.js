@@ -64,7 +64,7 @@
       try{await persist();}catch(e){data.mailUpdates=previousUpdates;data.gmailSettings=previousSettings;throw e;}
       if(!data||version!==sessionVersion)return;
       render();toast(incoming.length?`${incoming.length} new ${incoming.length===1?'update':'updates'} found.`:'No new matching updates found.');
-    }catch(error){if(error.name!=='AbortError'&&data&&version===sessionVersion){if(error.status===401){endSession();renderMail();}toast(error.message||'Could not check Gmail. Try again.');}}
+    }catch(error){controller?.abort();if(error.name!=='AbortError'&&data&&version===sessionVersion){if(error.status===401){endSession();renderMail();}toast(error.message||'Could not check Gmail. Try again.');}}
     finally{if(version===sessionVersion){busy=false;controller=null;renderMail();}}
   }
   $('#mail-setup-form').addEventListener('submit',async event=>{
