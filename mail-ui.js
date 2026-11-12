@@ -3,25 +3,28 @@
   const SCOPE='https://www.googleapis.com/auth/gmail.readonly';
   const CHECK_INTERVAL=10*60*1000, MAX_MESSAGES=300;
   let token='', expiresAt=0, timer=null, controller=null, busy=false, gisLoading=false, gisReady=false, sessionVersion=0;
+  let lastError='',progressMessage='',sessionAccount='';
   const getSettings=()=>data?.gmailSettings||{};
-  const mailApi=globalThis.GradMail;
+  const mailApi=globalThis.GradMail,gate=mailApi.createRequestGate(800);
+  function setProgress(message){progressMessage=message;if(data)$('#mail-status').textContent=message;}
+  function showMailError(message){lastError=message;renderMail();toast(message);}
   function initGoogle(){
     if(gisReady||gisLoading||globalThis.google?.accounts?.oauth2){gisReady=!!globalThis.google?.accounts?.oauth2;return;}
     gisLoading=true;const script=document.createElement('script');script.src='https://accounts.google.com/gsi/client';script.async=true;
     script.onload=()=>{gisReady=!!globalThis.google?.accounts?.oauth2;gisLoading=false;renderMail();};
-    script.onerror=()=>{gisLoading=false;$('#mail-status').textContent='Google sign-in could not load. Check your connection and try again.';};document.head.appendChild(script);
+    script.onerror=()=>{gisLoading=false;showMailError('Google sign-in could not load. Check your connection and try again.');};document.head.appendChild(script);
   }
-  function endSession(){sessionVersion++;clearInterval(timer);timer=null;controller?.abort();controller=null;token='';expiresAt=0;busy=false;}
+  function endSession(){sessionVersion++;clearInterval(timer);timer=null;controller?.abort();controller=null;token='';expiresAt=0;busy=false;sessionAccount='';progressMessage='';gate.reset();}
   function renderMail(){
     if(!data)return;
     const settings=getSettings(), updates=data.mailUpdates||[];
     const connected=!!token&&Date.now()<expiresAt;
     if(token&&!connected)endSession();
     $('#mail-connect').hidden=connected;$('#mail-connect').disabled=busy;$('#mail-sync').hidden=!connected;$('#mail-sync').disabled=busy;$('#mail-disconnect').hidden=!connected;
-    let state=connected?`Connected to ${settings.account||'Gmail'}. Checking every 10 minutes while this page is open.`:'Not connected in this session.';
+    let state=connected?`Connected to ${sessionAccount||settings.account||'Gmail'}. Checking every 10 minutes while this page is open.`:'Not connected in this session.';
     if(settings.lastSync)state+=` Last checked: ${new Date(settings.lastSync).toLocaleString()}.`;
     if(settings.truncated)state+=' The last check reached its 300-message limit; older matching emails may be missing.';
-    $('#mail-status').textContent=busy?'Checking Gmail for application updates…':state;
+    $('#mail-status').textContent=busy?(progressMessage||'Checking Gmail for application updates…'):(lastError?`${state} ${lastError}`:state);
     const idInput=$('#google-client-id');if(document.activeElement!==idInput)idInput.value=settings.clientId||'';
     if(!settings.clientId)$('#mail-setup').open=true;
     const count=updates.filter(u=>!u.reviewed).length;$('#updates-count').hidden=!count;$('#updates-count').textContent=count;
@@ -35,18 +38,32 @@
     }).join(''):'<div class="empty-state">No updates saved yet. Connect Gmail and check for recent application messages.</div>';
   }
   async function requestJson(path,signal){
-    const response=await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`,{headers:{Authorization:`Bearer ${token}`},signal,cache:'no-store'});
-    let result={};try{result=await response.json();}catch{}
-    if(!response.ok){const err=new Error(response.status===401?'Your Google session expired. Connect Gmail again.':response.status===403?'Gmail did not allow access. Check that the Gmail API is enabled and your account is listed as a test user.':`Gmail could not be checked (HTTP ${response.status}).`);err.status=response.status;throw err;}
-    return result;
+    let attempt=0;
+    while(true){
+      await gate.wait(signal);
+      let response;
+      try{response=await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/${path}`,{headers:{Authorization:`Bearer ${token}`},signal,cache:'no-store'});}
+      catch(error){if(error.name==='AbortError')throw error;throw new Error('Could not reach Gmail. Check your internet connection and try again.');}
+      let result={};try{result=await response.json();}catch{}
+      if(response.ok)return result;
+      const info=mailApi.apiError(response.status,result);
+      if(info.temporary&&attempt++<1){
+        const raw=response.headers.get('Retry-After');let suggested=Number(raw)>0?Number(raw)*1000:Date.parse(raw)-Date.now();
+        if(!Number.isFinite(suggested)||suggested<0)suggested=0;
+        const retryMs=Math.max(65000,suggested);
+        if(retryMs<=120000){setProgress('Google is temporarily limiting Gmail requests. GradPath will retry shortly; keep this page open.');await mailApi.abortableDelay(retryMs,signal);continue;}
+      }
+      const error=new Error(info.message);error.status=response.status;error.reason=info.reason;throw error;
+    }
   }
   async function syncMail(){
     if(busy||!data)return;
-    if(!token||Date.now()>=expiresAt){endSession();renderMail();toast('Connect Gmail again to check for updates.');return;}
-    busy=true;controller=new AbortController();const signal=controller.signal,version=sessionVersion;renderMail();
+    if(!token||Date.now()>=expiresAt){endSession();showMailError('Connect Gmail again to check for updates.');return;}
+    lastError='';busy=true;const currentController=new AbortController();controller=currentController;const signal=currentController.signal,version=sessionVersion;
+    setProgress('Connecting to Gmail and finding recent messages…');renderMail();
     try{
       const profile=await requestJson('profile',signal);if(!profile.emailAddress)throw new Error('Could not identify the connected Gmail account.');
-      const account=profile.emailAddress,settings=getSettings();
+      const account=profile.emailAddress,settings=getSettings();sessionAccount=account;
       const after=settings.account===account&&settings.lastSync?`after:${Math.floor((settings.lastSync-48*3600000)/1000)}`:'newer_than:180d';
       const q=`${after} -in:sent -in:drafts -in:spam -in:trash {application admission admissions graduate recommendation transcript assistantship enrollment enrolment portal decision}`;
       let pageToken='',messages=[],truncated=false;
@@ -55,37 +72,62 @@
         const page=await requestJson(`messages?${params}`,signal);messages.push(...(page.messages||[]));pageToken=page.nextPageToken||'';
         if(messages.length>=MAX_MESSAGES){messages=messages.slice(0,MAX_MESSAGES);truncated=!!pageToken;break;}
       }while(pageToken);
-      const incoming=[],existing=new Set((data.mailUpdates||[]).map(u=>u.key));let cursor=0;
-      async function worker(){while(cursor<messages.length){const item=messages[cursor++];const key=`${account}:${item.id}`;if(existing.has(key))continue;const raw=await requestJson(`messages/${encodeURIComponent(item.id)}?format=full`,signal);const parsed=mailApi.parseMessage(raw);const matches=mailApi.matchApplications(parsed,data.applications);if(!matches.length)continue;const next=mailApi.actionFor(parsed);incoming.push({key,id:parsed.id,threadId:parsed.threadId,account,from:parsed.from,subject:parsed.subject,date:parsed.date,snippet:parsed.snippet.slice(0,350),label:next.label,action:next.action,candidates:matches.map(m=>m.id),appId:matches.length===1?matches[0].id:'',reviewed:false});}}
-      await Promise.all(Array.from({length:Math.min(5,messages.length)},worker));
+      const existing=new Set((data.mailUpdates||[]).map(u=>u.key));let completed=0,added=0;
+      const updateProgress=()=>setProgress(`Checking Gmail: ${completed} of ${messages.length} messages reviewed; ${added} new updates saved. The first check can take a few minutes.`);
+      updateProgress();
+      for(let start=0;start<messages.length;start+=20){
+        const group=messages.slice(start,start+20),incoming=[];let cursor=0;
+        async function worker(){while(cursor<group.length){
+          if(!data||version!==sessionVersion||signal.aborted)return;
+          const item=group[cursor++],key=`${account}:${item.id}`;
+          if(existing.has(key)){completed++;updateProgress();continue;}
+          let raw;try{raw=await requestJson(`messages/${encodeURIComponent(item.id)}?format=full`,signal);}catch(error){if(error.status!==404)throw error;completed++;updateProgress();continue;}
+          if(!data||version!==sessionVersion||signal.aborted)return;
+          const parsed=mailApi.parseMessage(raw),matches=mailApi.matchApplications(parsed,data.applications);
+          if(matches.length){const next=mailApi.actionFor(parsed);incoming.push({key,id:parsed.id,threadId:parsed.threadId,account,from:parsed.from,subject:parsed.subject,date:parsed.date,snippet:parsed.snippet.slice(0,350),label:next.label,action:next.action,candidates:matches.map(m=>m.id),appId:matches.length===1?matches[0].id:'',reviewed:false});existing.add(key);}
+          completed++;updateProgress();
+        }}
+        await Promise.all(Array.from({length:Math.min(5,group.length)},worker));
+        if(!data||version!==sessionVersion)return;
+        if(incoming.length){
+          const previous=data.mailUpdates;data.mailUpdates=[...(data.mailUpdates||[]),...incoming];
+          try{await persist();}catch(error){if(data&&version===sessionVersion)data.mailUpdates=previous;throw error;}
+          if(!data||version!==sessionVersion)return;
+          added+=incoming.length;updateProgress();renderMail();
+        }
+      }
       if(!data||version!==sessionVersion)return;
-      const previousUpdates=data.mailUpdates,previousSettings=data.gmailSettings;
-      data.mailUpdates=[...(data.mailUpdates||[]),...incoming];data.gmailSettings={...settings,account,lastSync:Date.now(),truncated};
-      try{await persist();}catch(e){data.mailUpdates=previousUpdates;data.gmailSettings=previousSettings;throw e;}
+      const previousSettings=data.gmailSettings;data.gmailSettings={...getSettings(),account,lastSync:Date.now(),truncated};
+      try{await persist();}catch(error){if(data&&version===sessionVersion)data.gmailSettings=previousSettings;throw error;}
       if(!data||version!==sessionVersion)return;
-      render();toast(incoming.length?`${incoming.length} new ${incoming.length===1?'update':'updates'} found.`:'No new matching updates found.');
-    }catch(error){controller?.abort();if(error.name!=='AbortError'&&data&&version===sessionVersion){if(error.status===401){endSession();renderMail();}toast(error.message||'Could not check Gmail. Try again.');}}
-    finally{if(version===sessionVersion){busy=false;controller=null;renderMail();}}
+      lastError='';render();toast(added?`${added} new ${added===1?'update':'updates'} found.`:'No new matching updates found.');
+    }catch(error){
+      currentController.abort();
+      if(error.name!=='AbortError'&&data&&version===sessionVersion){
+        if(error.status===401)endSession();else gate.reset();
+        lastError=error.message||'Could not check Gmail. Try again.';renderMail();toast(lastError);
+      }
+    }finally{if(version===sessionVersion){busy=false;controller=null;progressMessage='';renderMail();}}
   }
   $('#mail-setup-form').addEventListener('submit',async event=>{
     event.preventDefault();const value=$('#google-client-id').value.trim(),error=$('#mail-setup-error');error.textContent='';
     if(!/^[0-9]+-[\w-]+\.apps\.googleusercontent\.com$/.test(value)){error.textContent='Enter the Web application client ID from Google Cloud.';return;}
     const previous=data.gmailSettings;data.gmailSettings={...(previous||{}),clientId:value};
-    try{await persist();endSession();$('#mail-setup').open=false;initGoogle();renderMail();toast('Client ID saved. You can now connect Gmail.');}catch{data.gmailSettings=previous;error.textContent='Could not save the client ID in this tracker.';}
+    try{await persist();endSession();lastError='';$('#mail-setup').open=false;initGoogle();renderMail();toast('Client ID saved. You can now connect Gmail.');}catch{data.gmailSettings=previous;error.textContent='Could not save the client ID in this tracker.';}
   });
   $('#mail-connect').addEventListener('click',()=>{
     const clientId=getSettings().clientId;if(!clientId){$('#mail-setup').open=true;$('#google-client-id').focus();toast('Complete the one-time Google setup first.');return;}
-    if(!gisReady){initGoogle();toast('Google sign-in is loading. Please select Connect Gmail again.');return;}
-    const requestedVersion=sessionVersion;
+    if(!gisReady){initGoogle();showMailError('Google sign-in is loading. Please select Connect Gmail again.');return;}
+    lastError='';renderMail();const requestedVersion=sessionVersion;
     try{
       const client=google.accounts.oauth2.initTokenClient({client_id:clientId,scope:SCOPE,include_granted_scopes:false,
-        callback:response=>{if(requestedVersion!==sessionVersion||!data){if(response.access_token)google.accounts.oauth2.revoke(response.access_token,()=>{});return;}if(response.error||!response.access_token){toast('Google access was not granted.');return;}if(!google.accounts.oauth2.hasGrantedAllScopes(response,SCOPE)){toast('Gmail read-only access was not granted.');return;}endSession();token=response.access_token;expiresAt=Date.now()+Math.max(0,(Number(response.expires_in)||3600)-30)*1000;timer=setInterval(syncMail,CHECK_INTERVAL);renderMail();syncMail();},
-        error_callback:()=>toast('Google sign-in was closed or could not open.')});
+        callback:response=>{if(requestedVersion!==sessionVersion||!data){if(response.access_token)google.accounts.oauth2.revoke(response.access_token,()=>{});return;}if(response.error||!response.access_token){showMailError('Google did not grant Gmail access. Choose your added test account and review the permission screen.');return;}if(!google.accounts.oauth2.hasGrantedAllScopes(response,SCOPE)){showMailError('Gmail read-only access was not granted. Reconnect and review the permission screen.');return;}endSession();lastError='';token=response.access_token;expiresAt=Date.now()+Math.max(0,(Number(response.expires_in)||3600)-30)*1000;timer=setInterval(syncMail,CHECK_INTERVAL);renderMail();syncMail();},
+        error_callback:()=>showMailError('Google sign-in was closed or could not open. Check whether your browser blocked the sign-in window.')});
       client.requestAccessToken({prompt:''});
-    }catch{toast('Could not start Google sign-in. Check the client ID.');}
+    }catch{showMailError('Could not start Google sign-in. Check the client ID and try again.');}
   });
   $('#mail-sync').addEventListener('click',syncMail);
-  $('#mail-disconnect').addEventListener('click',()=>{const old=token;endSession();if(old&&globalThis.google?.accounts?.oauth2)google.accounts.oauth2.revoke(old,()=>{});renderMail();toast('Gmail disconnected. Saved updates remain encrypted in your tracker.');});
+  $('#mail-disconnect').addEventListener('click',()=>{const old=token;endSession();lastError='';if(old&&globalThis.google?.accounts?.oauth2)google.accounts.oauth2.revoke(old,()=>{});renderMail();toast('Gmail disconnected. Saved updates remain encrypted in your tracker.');});
   $('#mail-list').addEventListener('change',async event=>{const select=event.target.closest('[data-mail-assign]');if(!select)return;const u=(data.mailUpdates||[]).find(x=>x.key===select.dataset.mailAssign);if(!u||!u.candidates.includes(select.value))return;u.appId=select.value;try{await persist();render();}catch{u.appId='';toast('Could not save that choice.');}});
   $('#mail-list').addEventListener('click',async event=>{
     const target=event.target.closest('[data-mail-review],[data-mail-task]');if(!target)return;

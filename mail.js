@@ -46,5 +46,33 @@
     const headers=message.payload?.headers||[];const header=name=>headers.find(h=>String(h.name).toLowerCase()===name)?.value||'';
     return {id:String(message.id||''),threadId:String(message.threadId||''),from:header('from'),subject:header('subject')||'(No subject)',date:Number(message.internalDate)||Date.parse(header('date'))||Date.now(),snippet:String(message.snippet||''),body:bodyText(message.payload)};
   }
-  const api={normalize,hostRoot,emailDomain,matchApplications,actionFor,decodeBody,bodyText,parseMessage};root.GradMail=api;if(typeof module!=='undefined')module.exports=api;
+  function abortableDelay(ms,signal){
+    return new Promise((resolve,reject)=>{
+      if(signal?.aborted){reject(new DOMException('Aborted','AbortError'));return;}
+      const complete=()=>{signal?.removeEventListener('abort',cancel);resolve();};
+      const id=setTimeout(complete,Math.max(0,ms));
+      function cancel(){clearTimeout(id);signal?.removeEventListener('abort',cancel);reject(new DOMException('Aborted','AbortError'));}
+      signal?.addEventListener('abort',cancel,{once:true});
+    });
+  }
+  function createRequestGate(interval=800,now=()=>Date.now(),sleep=abortableDelay){
+    let next=0;
+    return {wait(signal){const current=now(),when=Math.max(current,next);next=when+interval;return sleep(when-current,signal);},reset(){next=0;}};
+  }
+  function apiError(status,payload){
+    const body=payload?.error||{};
+    const reasons=[...(Array.isArray(body.errors)?body.errors.map(x=>x?.reason):[]),...(Array.isArray(body.details)?body.details.map(x=>x?.reason):[])].filter(x=>typeof x==='string'&&/^[a-zA-Z][\w]{0,63}$/.test(x));
+    const reason=reasons.find(x=>/^(SERVICE_DISABLED|accessNotConfigured|insufficientPermissions|ACCESS_TOKEN_SCOPE_INSUFFICIENT|userRateLimitExceeded|rateLimitExceeded|quotaExceeded|dailyLimitExceeded|domainPolicy)$/i.test(x))||reasons[0]||'';
+    const lower=reason.toLowerCase();let message;
+    if(status===401)message='Your Google session expired. Select Connect Gmail to sign in again.';
+    else if(lower==='service_disabled'||lower==='accessnotconfigured')message='The Gmail API is not enabled for the Google project associated with this client ID, or Google is still activating it. Check that project and try again.';
+    else if(lower==='insufficientpermissions'||lower==='access_token_scope_insufficient')message='Google did not grant Gmail read-only access. Reconnect Gmail and review the permission screen.';
+    else if(lower==='domainpolicy')message='This Google account’s administrator does not allow the Gmail API. Contact the account administrator.';
+    else if(status===429||lower==='userratelimitexceeded'||lower==='ratelimitexceeded')message='Google is limiting Gmail requests for a short time. Please wait and try Check now again.';
+    else if(lower==='dailylimitexceeded'||lower==='quotaexceeded')message='The Google project has reached a Gmail API quota limit. Check the project’s Gmail API quotas and try again later.';
+    else if(status===403)message='Google could not allow the Gmail request. Check the Gmail API and granted permission for the selected account.';
+    else message=`Gmail could not be checked (HTTP ${status}). Try again.`;
+    return {message:reason?`${message} (Google reason: ${reason}; HTTP ${status})`:message,reason,temporary:status===429||lower==='userratelimitexceeded'||lower==='ratelimitexceeded'};
+  }
+  const api={normalize,hostRoot,emailDomain,matchApplications,actionFor,decodeBody,bodyText,parseMessage,abortableDelay,createRequestGate,apiError};root.GradMail=api;if(typeof module!=='undefined')module.exports=api;
 })(globalThis);
