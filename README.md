@@ -14,3 +14,16 @@ A small, responsive graduate application tracker built with plain HTML, CSS, and
 - Program and application links should be checked before use. Search links are labeled as such when a direct page was not available.
 
 Serve this directory from HTTPS or from a local development server. No build step or installation is required. A modern browser with Web Crypto is needed.
+
+## Gmail updates
+
+- Gmail access is optional and uses the `gmail.readonly` scope. GradPath reads likely application-related messages directly from Gmail in the unlocked browser; an access token is kept in memory only. Saved message snippets and suggested actions are included in the encrypted local tracker and encrypted backups.
+- Set up a Google Cloud project, enable the Gmail API, configure an External OAuth consent screen in Testing, add the user's Google account as a test user and add the Gmail read-only scope. Create a Web application OAuth client with `https://elvisfrimpong-da.github.io` as an authorized JavaScript origin. Save the client ID in GradPath and grant read-only access through Google. A client secret is not used. Google may show an unverified-app warning for a personal testing project.
+- It checks every ten minutes only while the page is open and the short-lived Google session is active. After closing the page or token expiration, reconnect to resume checking. It does not run in the background while the tracker is closed.
+- The initial check searches the last 180 days, with a maximum of 300 candidate messages per check. Later checks include an overlap. School and content matching is approximate and can miss messages or make incorrect matches; review the original message and portal. Suggestions are rule-based and do not establish an admission decision.
+- No email is sent, changed, deleted, or marked read. The application status never changes automatically. Adding a suggested action to the to-do list requires a click.
+
+## School research import
+
+- The Applications screen accepts a separate `gradpath-school-research-v1` JSON research file. Records are matched by existing application ID, school and program. Research is shown as a dated, sourced snapshot inside matching application details and is encrypted with the tracker. The import leaves existing application status, notes, fees and tasks intact.
+- Verify dates for the relevant intake and international applicant category on the linked official pages. Importing a research file does not update the source spreadsheet.

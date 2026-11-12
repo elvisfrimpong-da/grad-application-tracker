@@ -8,7 +8,9 @@
   <title>GradPath | Application tracker</title>
   <link rel="stylesheet" href="styles.css">
   <script src="crypto.js" defer></script>
+  <script src="mail.js" defer></script>
   <script src="app.js" defer></script>
+  <script src="mail-ui.js" defer></script>
 </head>
 <body>
   <div id="login" class="login-view">
@@ -41,6 +43,7 @@
         <button class="nav-item active" data-view="overview"><span class="nav-icon">◫</span> Overview</button>
         <button class="nav-item" data-view="applications"><span class="nav-icon">▤</span> Applications <span class="nav-count" id="nav-count">0</span></button>
         <button class="nav-item" data-view="todo"><span class="nav-icon">☑</span> To-do list</button>
+        <button class="nav-item" data-view="updates"><span class="nav-icon">✉</span> Gmail updates <span class="nav-count" id="updates-count" hidden>0</span></button>
       </nav>
       <div class="sidebar-bottom">
         <div class="sidebar-tip"><span class="tip-star">✳</span><strong>One step at a time.</strong><p>Every small task brings you closer to your next chapter.</p></div>
@@ -60,7 +63,7 @@
         <div id="overview-list" class="application-list"></div>
       </section>
       <section id="applications-view" class="view" hidden>
-        <div class="welcome-row"><div><p class="eyebrow">YOUR SCHOOLS</p><h1>Applications<span class="heading-dot">.</span></h1><p class="subtitle">A home for every application in your plan.</p></div><button class="button primary add-app">+ &nbsp; Add application</button></div>
+        <div class="welcome-row"><div><p class="eyebrow">YOUR SCHOOLS</p><h1>Applications<span class="heading-dot">.</span></h1><p class="subtitle">A home for every application in your plan.</p></div><div class="research-actions"><button class="button secondary" id="import-research" type="button">Import school details</button><button class="button primary add-app">+ &nbsp; Add application</button></div></div>
         <div class="toolbar"><label class="search-wrap"><span aria-hidden="true">⌕</span><span class="sr-only">Search applications</span><input id="search" type="search" placeholder="Search school or program..."></label><label class="filter-wrap"><span class="sr-only">Filter by status</span><select id="status-filter"><option value="">All statuses</option><option>In Progress</option><option>Not Started</option><option>Submitted</option><option>Completed</option><option>Accepted</option><option>Rejected</option><option>Not specified</option></select></label></div>
         <p class="results-label" id="results-label"></p><div id="all-list" class="application-list"></div>
       </section>
@@ -68,6 +71,18 @@
         <div class="welcome-row"><div><p class="eyebrow">ONE THING AT A TIME</p><h1>Your to-do list<span class="heading-dot">.</span></h1><p class="subtitle">Your next steps, gathered in one place.</p></div></div>
         <div class="todo-intro"><span>✳</span><p>Only items marked <strong>To do</strong> appear here. Open an application to confirm unknown requirements, add tasks, or update recommendation letters.</p></div>
         <div id="todo-list" class="todo-list"></div>
+      </section>
+      <section id="updates-view" class="view" hidden>
+        <div class="welcome-row"><div><p class="eyebrow">YOUR APPLICATION INBOX</p><h1>Gmail updates<span class="heading-dot">.</span></h1><p class="subtitle">Recent messages from your schools, with a suggested next step.</p></div></div>
+        <div class="mail-panel">
+          <div class="mail-panel-head"><div><h2>Connect your Gmail</h2><p id="mail-status" role="status" aria-live="polite">Not connected in this session.</p></div><div class="mail-buttons"><button type="button" class="button primary" id="mail-connect">Connect Gmail</button><button type="button" class="button secondary" id="mail-sync" hidden>Check now</button><button type="button" class="button secondary" id="mail-disconnect" hidden>Disconnect</button></div></div>
+          <p class="mail-privacy">GradPath requests read-only access to your Gmail. Matching happens in this browser. Saved updates are encrypted with your tracker. It checks for mail while this page is open; reconnect after closing the page or when Google access expires.</p>
+          <details id="mail-setup"><summary>One-time Google setup</summary><ol><li>Create a Google Cloud project and enable the Gmail API.</li><li>Set the OAuth consent audience to External and Testing, add your Google account as a test user, and add the Gmail read-only scope in Data Access.</li><li>Create a <strong>Web application</strong> OAuth client. Add <code>https://elvisfrimpong-da.github.io</code> as an authorized JavaScript origin.</li><li>Paste the client ID below and save it. Then select Connect Gmail and approve read-only access.</li></ol><p>Google may show an unverified-app warning for a personal testing project. You control the project and may review the requested permission before continuing. <a href="https://developers.google.com/workspace/gmail/api/quickstart/js" target="_blank" rel="noopener noreferrer">Google's setup guide ↗</a></p>
+            <form id="mail-setup-form"><label for="google-client-id">Google OAuth client ID</label><div class="mail-setup-row"><input id="google-client-id" autocomplete="off" placeholder="Your client ID ending in .apps.googleusercontent.com" required><button class="button secondary" type="submit">Save client ID</button></div><p id="mail-setup-error" class="form-error" role="alert"></p></form>
+          </details>
+        </div>
+        <div class="section-header mail-list-header"><div><p class="eyebrow">FROM YOUR SCHOOLS</p><h2>Recent updates</h2><p class="section-subtitle">Only likely matches are shown, so some messages may be missed. Review the original email; application status will not change automatically.</p></div></div>
+        <div id="mail-list" class="mail-list"></div>
       </section>
       <footer class="page-footer"><span>GradPath · Your next chapter starts here.</span><span>Changes are saved only in this browser. Export a backup to move them.</span></footer>
     </main>
@@ -108,6 +123,7 @@
         <div class="detail-section"><div class="detail-section-head"><div><h3>Useful links</h3><p>Open these pages or replace them with the correct URLs.</p></div></div><div class="form-grid"><label>Department or program URL<input name="department" type="url" placeholder="https://..."></label><label>Graduate application URL<input name="portal" type="url" placeholder="https://..."></label></div><div id="detail-links" class="detail-links"></div></div>
         <div class="detail-section"><div class="detail-section-head"><div><h3>Documents &amp; tasks</h3><p>“Confirm” means the source did not establish the requirement or completion.</p></div><button class="text-button" id="add-task" type="button">+ Add task</button></div><div id="task-editor" class="editor-list"></div></div>
         <div class="detail-section"><div class="detail-section-head"><div><h3>Recommenders</h3><p>Track each person's progress and update the letter count above as letters arrive.</p></div><button class="text-button" id="add-recommender" type="button">+ Add person</button></div><div id="recommender-editor" class="editor-list"></div></div>
+        <div class="detail-section" id="research-section" hidden><div class="detail-section-head"><div><h3>School admissions research</h3><p>Research is a dated snapshot. Confirm the current requirements and your intake on the official pages.</p></div></div><div id="research-content"></div></div>
         <div class="detail-section"><label>Notes from your application<textarea name="notes" rows="4" placeholder="Add anything you want to remember"></textarea></label></div>
         <p class="source-hint" id="source-hint"></p>
       </div>
@@ -115,6 +131,7 @@
     </form>
   </dialog>
   <input id="import-file" type="file" accept="application/json,.json" hidden>
+  <input id="research-file" type="file" accept="application/json,.json" hidden>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 </body>
 </html>

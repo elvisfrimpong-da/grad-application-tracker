@@ -141,6 +141,7 @@ $('#password-setup-form').addEventListener('submit',async event=>{
 function switchView(view){
   activeView=view; $$('.view').forEach(element=>element.hidden=element.id!==`${view}-view`);
   $$('.nav-item').forEach(button=>button.classList.toggle('active',button.dataset.view===view));
+  if(view==='updates')globalThis.GradMailUI?.prepare();
   window.scrollTo({top:0,behavior:'smooth'}); render();
 }
 $$('[data-view]').forEach(el=>el.addEventListener('click',()=>switchView(el.dataset.view)));
@@ -186,7 +187,7 @@ function render(){
   if(!data)return;
   $('#today-label').textContent=new Intl.DateTimeFormat(undefined,{weekday:'long',year:'numeric',month:'long',day:'numeric'}).format(new Date());
   const source=safeUrl(data.sourceUrl);$('#source-link').hidden=!source;if(source)$('#source-link').href=source;
-  renderStats();renderFocus();renderApplications();renderTodo();
+  renderStats();renderFocus();renderApplications();renderTodo();globalThis.GradMailUI?.render();
 }
 
 function openApp(id){
@@ -194,14 +195,14 @@ function openApp(id){
   currentId=id;const form=$('#detail-form');
   $('#dialog-title').textContent=app.school;$('#detail-eyebrow').textContent='APPLICATION DETAILS';$('#delete-app').hidden=false;
   for(const field of ['school','program','status','deadline','fee','funding','letters','department','portal','notes']) form.elements[field].value=app[field]||((field==='status')?'Not specified':'');
-  renderEditors(app);renderLinks(app);
+  renderEditors(app);renderLinks(app);renderResearch(app);
   $('#source-hint').textContent=app.sourceRow?`Imported from spreadsheet row ${app.sourceRow}. ${app.recommendationsReviewed?'Recommender information also reflects school emails reviewed on 10 November 2026. ':''}Check the portal for current requirements and progress.`:'Added to this tracker.';
   $('#detail-dialog').showModal();
 }
 function addNewApp(){
   currentId=null;const form=$('#detail-form');form.reset();form.elements.status.value='Not specified';
   $('#dialog-title').textContent='Add an application';$('#detail-eyebrow').textContent='A NEW OPPORTUNITY';$('#delete-app').hidden=true;
-  renderEditors({tasks:[],recommenders:[]});$('#detail-links').innerHTML='';$('#source-hint').textContent='Add the details you know. You can return to fill in the rest.';$('#detail-dialog').showModal();
+  renderEditors({tasks:[],recommenders:[]});$('#research-section').hidden=true;$('#detail-links').innerHTML='';$('#source-hint').textContent='Add the details you know. You can return to fill in the rest.';$('#detail-dialog').showModal();
 }
 function searchUrl(app,kind){return `https://www.google.com/search?q=${encodeURIComponent(`${app.school} ${app.program||''} ${kind==='department'?'graduate program department':'graduate application portal'}`)}`;}
 function renderLinks(app){
@@ -266,4 +267,32 @@ $('#import-file').addEventListener('change',async event=>{
     if(restored){render();toast('Backup restored in this browser.');}
   }catch{toast('Could not open this backup with the current password. Older backups may use an earlier password.');}finally{event.target.value='';}
 });
-$('#lock-button').addEventListener('click',()=>{data=null;sessionKey=null;envelope=null;$('#app').hidden=true;$('#login').hidden=false;$('#login-error').textContent='';$('#password').focus();});
+$('#lock-button').addEventListener('click',()=>{globalThis.GradMailUI?.stop();data=null;sessionKey=null;envelope=null;$('#app').hidden=true;$('#login').hidden=false;$('#login-error').textContent='';$('#password').focus();});
+
+function renderResearch(app){
+  const info=app.research;$('#research-section').hidden=!info;if(!info)return;
+  const lines=[['Application fee',info.fee],['Deadline',info.deadline],['Additional requirements',info.requirements]];
+  const fields=lines.map(([label,value])=>`<div class="research-field"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value||'Not yet verified')}</span></div>`).join('');
+  const sources=(info.sources||[]).filter(source=>{try{return new URL(source.url).protocol==='https:';}catch{return false;}}).map(source=>`<a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.label||'Official source')} ↗</a>`).join('');
+  $('#research-content').innerHTML=`<div class="research-grid">${fields}</div><p class="research-date">Checked ${escapeHtml(info.checkedAt||'date not recorded')} · Verify intake, degree, and international applicant conditions.</p><div class="detail-links">${sources}</div>`;
+}
+$('#import-research').addEventListener('click',()=>$('#research-file').click());
+$('#research-file').addEventListener('change',async event=>{
+  const file=event.target.files[0];if(!file)return;
+  try{
+    if(file.size>2_000_000)throw new Error('This school details file is too large.');
+    const pack=JSON.parse(await file.text());if(pack.kind!=='gradpath-school-research-v1'||!Array.isArray(pack.records)||pack.records.length>500)throw new Error('Choose a GradPath school details file.');
+    const changed=[];
+    for(const item of pack.records){
+      const app=data.applications.find(a=>a.id===item.id&&GradMail.normalize(a.school)===GradMail.normalize(item.school));
+      if(!app||!item.research||changed.some(c=>c.app===app))continue;
+      if(item.program&&GradMail.normalize(app.program)!==GradMail.normalize(item.program))continue;
+      const info=item.research;
+      const sources=Array.isArray(info.sources)?info.sources.filter(x=>x&&typeof x.url==='string'&&typeof x.label==='string'&&x.url.startsWith('https://')).slice(0,8).map(x=>({url:x.url.slice(0,1000),label:x.label.slice(0,100)})):[];
+      changed.push({app,previous:app.research});app.research={fee:String(info.fee||'').slice(0,1500),deadline:String(info.deadline||'').slice(0,1500),requirements:String(info.requirements||'').slice(0,3000),checkedAt:String(info.checkedAt||'').slice(0,50),sources};
+    }
+    if(!changed.length)throw new Error('No matching applications were found in this tracker.');
+    try{await persist();}catch(error){changed.forEach(x=>x.app.research=x.previous);throw error;}
+    render();toast(`School details added to ${changed.length} ${changed.length===1?'application':'applications'}.`);
+  }catch(error){toast(error.message||'Could not import school details.');}finally{event.target.value='';}
+});
